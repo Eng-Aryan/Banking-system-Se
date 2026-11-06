@@ -10,7 +10,7 @@ pipeline {
         IMAGE_TAG = "${BUILD_NUMBER}"
         REGISTRY = 'your-dockerhub-or-nexus-url'
         SONAR_HOST_URL = 'http://sonarqube:9000'
-        JWT_SECRET = credentials('mern-jwt-secret')
+        JWT_SECRET = credentials('banking-mern-jwt-secret')
     }
 
     stages {
