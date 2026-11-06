@@ -50,15 +50,15 @@ pipeline {
 
                         withCredentials([
                             string(
-                                credentialsId: 'soner-token',
+                                credentialsId: 'sonar-token-for-bank',
                                 variable: 'SONAR_TOKEN'
                             )
                         ]) {
                             sh '''
                                 sonar-scanner \
                                 -Dsonar.login=${SONAR_TOKEN} \
-                                -Dsonar.projectKey=mern-ecommerce \
-                                -Dsonar.projectName="MERN Ecommerce" \
+                                -Dsonar.projectKey=sonar-token-for-bank \
+                                -Dsonar.projectName="bank system" \
                                 -Dsonar.sources=. \
                                 -Dsonar.host.url=${SONAR_HOST_URL}
                             '''
