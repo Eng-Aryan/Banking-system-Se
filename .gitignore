@@ -1,5 +1,14 @@
-node_modules/
+# Environment files containing secrets
 .env
 .env.*
+**/.env
+**/.env.*
+
+# Keep the empty example file
 !.env.example
+!**/.env.example
+
+# Dependencies and generated files
+node_modules/
 dist/
+coverage/
