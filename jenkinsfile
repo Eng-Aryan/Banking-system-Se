@@ -5,196 +5,318 @@ pipeline {
         nodejs 'node18'
     }
 
+    options {
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
+    }
+
+    parameters {
+        string(
+            name: 'SONAR_PROJECT_KEY',
+            defaultValue: '',
+            description: 'Exact project key from SonarQube'
+        )
+
+        string(
+            name: 'STAGING_URL',
+            defaultValue: 'http://host.docker.internal:8000',
+            description: 'Bank frontend URL reachable from Jenkins'
+        )
+
+        booleanParam(
+            name: 'DEPLOY_PRODUCTION',
+            defaultValue: false,
+            description: 'Run the Ansible production deployment'
+        )
+
+        string(
+            name: 'PRODUCTION_HEALTH_URL',
+            defaultValue: '',
+            description: 'Production health URL reachable from Jenkins'
+        )
+    }
+
     environment {
-        APP_NAME = 'mern-ecommerce'
-        IMAGE_TAG = "${BUILD_NUMBER}"
-        REGISTRY = 'your-dockerhub-or-nexus-url'
+        APP_NAME = 'bank-system'
+
         SONAR_HOST_URL = 'http://sonarqube:9000'
+
+        MONGO_USER = 'bank'
+        MONGO_PASS = credentials('banking-mongo-password')
         JWT_SECRET = credentials('banking-mern-jwt-secret')
+
+        COOKIE_SECURE = 'false'
     }
 
     stages {
+        // Jenkins automatically checks out the repository
+        // using the credentials configured in the job.
 
-        // ==========================================
-        // 1. PRE-BUILD PHASE
-        // ==========================================
-        stage('Pre-Build Phase') {
-            parallel {
-                stage('Trigger & Code Fetch') {
-                    steps {
-                        echo 'Fetching source code from GitHub...'
-                        git branch: 'main',
-                            url: 'https://github.com/sarahtechly/Banking-system-Se.git'
+        stage('Check Configuration & Tools') {
+            steps {
+                script {
+                    if (!params.SONAR_PROJECT_KEY.trim()) {
+                        error(
+                            'Set SONAR_PROJECT_KEY to your actual SonarQube project key.'
+                        )
+                    }
+
+                    if (
+                        params.DEPLOY_PRODUCTION &&
+                        !params.PRODUCTION_HEALTH_URL.trim()
+                    ) {
+                        error(
+                            'Set PRODUCTION_HEALTH_URL before production deployment.'
+                        )
                     }
                 }
 
-                stage('Code Linting & Formatting') {
+                sh '''
+                    set -eu
+
+                    node --version
+                    npm --version
+                    git --version
+
+                    docker --version
+                    docker compose version
+                    docker info > /dev/null
+
+                    gitleaks version
+                    python3 --version
+                    curl --version > /dev/null
+                '''
+            }
+        }
+
+        // Scan before installing dependencies.
+        stage('Secret Detection') {
+            steps {
+                sh '''
+                    gitleaks detect \
+                      --source=. \
+                      --no-git \
+                      --redact
+                '''
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                dir('client') {
+                    sh '''
+                        set -eu
+                        if [ -f package-lock.json ]; then
+                            npm ci
+                        else
+                            npm install
+                        fi
+                    '''
+                }
+
+                dir('server') {
+                    sh '''
+                        set -eu
+                        if [ -f package-lock.json ]; then
+                            npm ci
+                        else
+                            npm install
+                        fi
+                    '''
+                }
+            }
+        }
+
+        stage('Pre-Build Phase') {
+            parallel {
+                stage('Code Linting') {
                     steps {
-                        echo 'Running Code Linting...'
                         dir('client') {
-                            sh 'npm run lint || true'
+                            sh 'npm run lint'
                         }
+
                         dir('server') {
-                            sh 'npm run lint || true'
+                            sh 'npm run lint'
                         }
                     }
                 }
 
                 stage('SAST (SonarQube Analysis)') {
                     steps {
-                        echo 'Running SAST Security Scan...'
+                        script {
+                            def scannerHome = tool 'sonar-scanner'
 
-                        dir('server') {
-                            sh 'npm test -- --coverage --watchAll=false || true'
-                        }
+                            withEnv([
+                                "SCANNER_HOME=${scannerHome}",
+                                "SONAR_PROJECT_KEY=${params.SONAR_PROJECT_KEY.trim()}"
+                            ]) {
+                                withCredentials([
+                                    string(
+                                        credentialsId: 'sonar-token-for-bank',
+                                        variable: 'SONAR_TOKEN'
+                                    )
+                                ]) {
+                                    sh '''
+                                        set +x
 
-                        withCredentials([
-                            string(
-                                credentialsId: 'sonar-token-for-bank',
-                                variable: 'SONAR_TOKEN'
-                            )
-                        ]) {
-                            sh '''
-                                sonar-scanner \
-                                -Dsonar.login=${SONAR_TOKEN} \
-                                -Dsonar.projectKey=sonar-token-for-bank \
-                                -Dsonar.projectName="bank system" \
-                                -Dsonar.sources=. \
-                                -Dsonar.host.url=${SONAR_HOST_URL}
-                            '''
+                                        "$SCANNER_HOME/bin/sonar-scanner" \
+                                          -Dsonar.login="$SONAR_TOKEN" \
+                                          -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
+                                          -Dsonar.projectName="Bank System" \
+                                          -Dsonar.sources=client/src,server/src \
+                                          -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**" \
+                                          -Dsonar.host.url="$SONAR_HOST_URL" \
+                                          -Dsonar.qualitygate.wait=true \
+                                          -Dsonar.qualitygate.timeout=300
+                                    '''
+                                }
+                            }
                         }
                     }
                 }
 
                 stage('Dependency & Vulnerability Scanning') {
                     steps {
-                        echo 'Scanning Node dependencies for vulnerabilities...'
                         dir('server') {
-                            sh 'npm audit --audit-level=high || true'
+                            sh 'npm audit --audit-level=high'
                         }
+
                         dir('client') {
-                            sh 'npm audit --audit-level=high || true'
+                            sh 'npm audit --audit-level=high'
                         }
                     }
                 }
 
-                stage('Secret Detection') {
+                stage('Automated Tests') {
                     steps {
-                        echo 'Scanning repository for hardcoded secrets...'
-                        sh 'gitleaks detect --source="." --no-git -v'
+                        dir('server') {
+                            sh 'npm test'
+                        }
                     }
                 }
             }
         }
 
-        // ==========================================
-        // 2. BUILD PHASE
-        // ==========================================
         stage('Build Phase') {
             stages {
-                stage('Build & Compilation') {
+                stage('Build Frontend') {
                     steps {
-                        echo 'Building React Frontend...'
-
                         dir('client') {
-                            sh 'npm install'
                             sh 'npm run build'
-                        }
-
-                        dir('server') {
-                            sh 'npm install'
                         }
                     }
                 }
 
-                stage('Containerization & Image Creation') {
+                stage('Build Docker Images') {
                     steps {
-                        echo 'Building Docker Images...'
                         sh 'docker compose build'
                     }
                 }
+            }
+        }
 
-                stage('Artifact Storing') {
+        stage('Staging Deployment & Testing') {
+            stages {
+                stage('Staging Deployment') {
                     steps {
-                        echo 'Pushing Docker Images to Artifact Registry (Nexus/ECR)...'
-                        // sh 'docker tag mern-backend:latest ${REGISTRY}/${APP_NAME}-backend:${IMAGE_TAG}'
-                        // sh 'docker push ${REGISTRY}/${APP_NAME}-backend:${IMAGE_TAG}'
+                        // Use the same project name for every deployment.
+                        // No "down" is needed before updating containers.
+                        sh '''
+                            docker compose \
+                              -p banking-system-se-main \
+                              up -d --wait --wait-timeout 120
+                        '''
+                    }
+                }
+
+                stage('Staging Smoke Test') {
+                    steps {
+                        withEnv([
+                            "BANK_STAGING_URL=${params.STAGING_URL.trim()}"
+                        ]) {
+                            sh '''
+                                curl \
+                                  --fail \
+                                  --silent \
+                                  --show-error \
+                                  --retry 12 \
+                                  --retry-delay 5 \
+                                  --retry-connrefused \
+                                  --max-time 15 \
+                                  --output /dev/null \
+                                  "$BANK_STAGING_URL"
+                            '''
+                        }
                     }
                 }
             }
         }
 
-        // ==========================================
-        // 3. POST-BUILD & TESTING PHASE
-        // ==========================================
-        stage('Post-Build & Testing Phase') {
+        stage('Production Deployment') {
+            when {
+                expression {
+                    return params.DEPLOY_PRODUCTION
+                }
+            }
+
             stages {
-                stage('Automated Unit & Integration Testing') {
+                stage('Manual Approval') {
                     steps {
-                        echo 'Running Unit and Integration Tests...'
-                        dir('server') {
-                            sh 'npm test || true'
+                        timeout(time: 30, unit: 'MINUTES') {
+                            input(
+                                message: 'Deploy this build to production?',
+                                ok: 'Deploy'
+                            )
                         }
                     }
                 }
 
-                stage('Staging Deployment') {
+                stage('Deploy with Ansible') {
                     steps {
-                        echo 'Deploying containers to Staging Environment...'
-                        sh 'docker compose down'
-                        sh 'docker compose up -d'
-                    }
-                }
+                        sh '''
+                            set -eu
+                            ansible-playbook --version
+                            test -f ansible/inventory.ini
+                            test -f ansible/deploy.yml
+                        '''
 
-                stage('DAST (Dynamic Security Testing)') {
-                    steps {
-                        echo 'Running OWASP ZAP DAST scan against Staging Environment...'
-                        // sh 'zap-cli quick-scan http://localhost:5000'
-                    }
-                }
-
-                stage('End-to-End (E2E) & Performance Testing') {
-                    steps {
-                        echo 'Running E2E Smoke Tests...'
-                        sh 'python3 tests/api_smoke_test.py || true'
-                    }
-                }
-            }
-        }
-
-        // ==========================================
-        // 4. DEPLOYMENT & MONITORING PHASE
-        // ==========================================
-        stage('Deployment & Monitoring Phase') {
-            stages {
-                stage('Manual Approval Gate') {
-                    steps {
-                        input message: 'Do you approve deploying this build to production?',
-                            ok: 'Deploy to Production'
-                    }
-                }
-
-                stage('Production Deployment (Blue-Green / Canary)') {
-                    steps {
-                        echo 'Deploying to Production Server via Ansible...'
-                        withCredentials([sshUserPrivateKey(credentialsId: 'aws-ec2-ssh-key', keyFileVariable: 'SSH_KEY')]) {
+                        withCredentials([
+                            sshUserPrivateKey(
+                                credentialsId: 'aws-ec2-ssh-key',
+                                keyFileVariable: 'SSH_KEY'
+                            )
+                        ]) {
                             sh '''
-                                ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --private-key ${SSH_KEY}
+                                set +x
+
+                                ansible-playbook \
+                                  -i ansible/inventory.ini \
+                                  ansible/deploy.yml \
+                                  --private-key "$SSH_KEY"
                             '''
                         }
                     }
                 }
 
-                stage('Post-Deployment Smoke Testing') {
+                stage('Production Smoke Test') {
                     steps {
-                        echo 'Checking server live health status...'
-                        sh 'curl -f http://localhost:5000/api/health || curl -f http://localhost:5000 || true'
-                    }
-                }
-
-                stage('Monitoring & Alerting Setup') {
-                    steps {
-                        echo 'Sending deployment status to Prometheus / Slack Alerts...'
+                        withEnv([
+                            "BANK_PRODUCTION_HEALTH_URL=${params.PRODUCTION_HEALTH_URL.trim()}"
+                        ]) {
+                            sh '''
+                                curl \
+                                  --fail \
+                                  --silent \
+                                  --show-error \
+                                  --retry 12 \
+                                  --retry-delay 5 \
+                                  --retry-connrefused \
+                                  --max-time 15 \
+                                  --output /dev/null \
+                                  "$BANK_PRODUCTION_HEALTH_URL"
+                            '''
+                        }
                     }
                 }
             }
@@ -202,17 +324,16 @@ pipeline {
     }
 
     post {
-        always {
-            echo 'Cleaning up workspace...'
-            cleanWs()
-        }
-
         success {
-            echo 'DevSecOps Pipeline Completed Successfully!'
+            echo 'Bank System pipeline completed successfully.'
         }
 
         failure {
-            echo 'Pipeline Failed. Sending alert...'
+            echo 'Pipeline failed. Check the failed stage in Console Output.'
+        }
+
+        always {
+            cleanWs()
         }
     }
 }
