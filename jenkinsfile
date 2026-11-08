@@ -14,22 +14,19 @@ pipeline {
     parameters {
         string(
             name: 'SONAR_PROJECT_KEY',
-            defaultValue: '',
+            defaultValue: 'bank-system',
             description: 'Exact project key from SonarQube'
         )
-
         string(
             name: 'STAGING_URL',
             defaultValue: 'http://host.docker.internal:8000',
             description: 'Bank frontend URL reachable from Jenkins'
         )
-
         booleanParam(
             name: 'DEPLOY_PRODUCTION',
             defaultValue: false,
             description: 'Run the Ansible production deployment'
         )
-
         string(
             name: 'PRODUCTION_HEALTH_URL',
             defaultValue: '',
@@ -39,65 +36,53 @@ pipeline {
 
     environment {
         APP_NAME = 'bank-system'
-
+        COMPOSE_PROJECT_NAME = 'banking-system-se-main'
         SONAR_HOST_URL = 'http://sonarqube:9000'
-
         MONGO_USER = 'bank'
-        MONGO_PASS = credentials('banking-mongo-password')
-        JWT_SECRET = credentials('banking-mern-jwt-secret')
-
         COOKIE_SECURE = 'false'
     }
 
     stages {
-        // Jenkins automatically checks out the repository
-        // using the credentials configured in the job.
+        // Automatic Checkout SCM uses the job's Git credentials.
 
         stage('Check Configuration & Tools') {
             steps {
                 script {
-                    if (!params.SONAR_PROJECT_KEY.trim()) {
-                        error(
-                            'Set SONAR_PROJECT_KEY to your actual SonarQube project key.'
-                        )
+                    if (!params.SONAR_PROJECT_KEY?.trim()) {
+                        error('SONAR_PROJECT_KEY is required.')
+                    }
+
+                    if (!params.STAGING_URL?.trim()) {
+                        error('STAGING_URL is required.')
                     }
 
                     if (
                         params.DEPLOY_PRODUCTION &&
-                        !params.PRODUCTION_HEALTH_URL.trim()
+                        !params.PRODUCTION_HEALTH_URL?.trim()
                     ) {
-                        error(
-                            'Set PRODUCTION_HEALTH_URL before production deployment.'
-                        )
+                        error('PRODUCTION_HEALTH_URL is required.')
                     }
                 }
 
                 sh '''
                     set -eu
-
                     node --version
                     npm --version
                     git --version
-
                     docker --version
                     docker compose version
                     docker info > /dev/null
-
                     gitleaks version
-                    python3 --version
                     curl --version > /dev/null
                 '''
             }
         }
 
-        // Scan before installing dependencies.
         stage('Secret Detection') {
             steps {
+                // Show the location of findings, but redact secrets.
                 sh '''
-                    gitleaks detect \
-                      --source=. \
-                      --no-git \
-                      --redact
+                    gitleaks detect --source=. --no-git --redact --verbose
                 '''
             }
         }
@@ -135,7 +120,6 @@ pipeline {
                         dir('client') {
                             sh 'npm run lint'
                         }
-
                         dir('server') {
                             sh 'npm run lint'
                         }
@@ -159,15 +143,16 @@ pipeline {
                                 ]) {
                                     sh '''
                                         set +x
+                                        set -eu
 
-                                        "$SCANNER_HOME/bin/sonar-scanner" \
-                                          -Dsonar.login="$SONAR_TOKEN" \
-                                          -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
-                                          -Dsonar.projectName="Bank System" \
-                                          -Dsonar.sources=client/src,server/src \
-                                          -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**" \
-                                          -Dsonar.host.url="$SONAR_HOST_URL" \
-                                          -Dsonar.qualitygate.wait=true \
+                                        "$SCANNER_HOME/bin/sonar-scanner" \\
+                                          -Dsonar.login="$SONAR_TOKEN" \\
+                                          -Dsonar.projectKey="$SONAR_PROJECT_KEY" \\
+                                          -Dsonar.projectName="Bank System" \\
+                                          -Dsonar.sources=client/src,server/src \\
+                                          -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**" \\
+                                          -Dsonar.host.url="$SONAR_HOST_URL" \\
+                                          -Dsonar.qualitygate.wait=true \\
                                           -Dsonar.qualitygate.timeout=300
                                     '''
                                 }
@@ -181,7 +166,6 @@ pipeline {
                         dir('server') {
                             sh 'npm audit --audit-level=high'
                         }
-
                         dir('client') {
                             sh 'npm audit --audit-level=high'
                         }
@@ -210,7 +194,22 @@ pipeline {
 
                 stage('Build Docker Images') {
                     steps {
-                        sh 'docker compose build'
+                        withCredentials([
+                            string(
+                                credentialsId: 'banking-mongo-password',
+                                variable: 'MONGO_PASS'
+                            ),
+                            string(
+                                credentialsId: 'banking-mern-jwt-secret',
+                                variable: 'JWT_SECRET'
+                            )
+                        ]) {
+                            sh '''
+                                set +x
+                                set -eu
+                                docker compose build
+                            '''
+                        }
                     }
                 }
             }
@@ -220,13 +219,24 @@ pipeline {
             stages {
                 stage('Staging Deployment') {
                     steps {
-                        // Use the same project name for every deployment.
-                        // No "down" is needed before updating containers.
-                        sh '''
-                            docker compose \
-                              -p banking-system-se-main \
-                              up -d --wait --wait-timeout 120
-                        '''
+                        withCredentials([
+                            string(
+                                credentialsId: 'banking-mongo-password',
+                                variable: 'MONGO_PASS'
+                            ),
+                            string(
+                                credentialsId: 'banking-mern-jwt-secret',
+                                variable: 'JWT_SECRET'
+                            )
+                        ]) {
+                            sh '''
+                                set +x
+                                set -eu
+
+                                docker compose up \
+                                  -d --wait --wait-timeout 120
+                            '''
+                        }
                     }
                 }
 
@@ -236,15 +246,14 @@ pipeline {
                             "BANK_STAGING_URL=${params.STAGING_URL.trim()}"
                         ]) {
                             sh '''
-                                curl \
-                                  --fail \
-                                  --silent \
-                                  --show-error \
-                                  --retry 12 \
-                                  --retry-delay 5 \
-                                  --retry-connrefused \
-                                  --max-time 15 \
-                                  --output /dev/null \
+                                set -eu
+
+                                curl --fail --silent --show-error \\
+                                  --retry 12 \\
+                                  --retry-delay 5 \\
+                                  --retry-connrefused \\
+                                  --max-time 15 \\
+                                  --output /dev/null \\
                                   "$BANK_STAGING_URL"
                             '''
                         }
@@ -261,6 +270,17 @@ pipeline {
             }
 
             stages {
+                stage('Check Production Tools') {
+                    steps {
+                        sh '''
+                            set -eu
+                            ansible-playbook --version
+                            test -f ansible/inventory.ini
+                            test -f ansible/deploy.yml
+                        '''
+                    }
+                }
+
                 stage('Manual Approval') {
                     steps {
                         timeout(time: 30, unit: 'MINUTES') {
@@ -274,13 +294,6 @@ pipeline {
 
                 stage('Deploy with Ansible') {
                     steps {
-                        sh '''
-                            set -eu
-                            ansible-playbook --version
-                            test -f ansible/inventory.ini
-                            test -f ansible/deploy.yml
-                        '''
-
                         withCredentials([
                             sshUserPrivateKey(
                                 credentialsId: 'aws-ec2-ssh-key',
@@ -289,10 +302,11 @@ pipeline {
                         ]) {
                             sh '''
                                 set +x
+                                set -eu
 
-                                ansible-playbook \
-                                  -i ansible/inventory.ini \
-                                  ansible/deploy.yml \
+                                ansible-playbook \\
+                                  -i ansible/inventory.ini \\
+                                  ansible/deploy.yml \\
                                   --private-key "$SSH_KEY"
                             '''
                         }
@@ -305,15 +319,14 @@ pipeline {
                             "BANK_PRODUCTION_HEALTH_URL=${params.PRODUCTION_HEALTH_URL.trim()}"
                         ]) {
                             sh '''
-                                curl \
-                                  --fail \
-                                  --silent \
-                                  --show-error \
-                                  --retry 12 \
-                                  --retry-delay 5 \
-                                  --retry-connrefused \
-                                  --max-time 15 \
-                                  --output /dev/null \
+                                set -eu
+
+                                curl --fail --silent --show-error \\
+                                  --retry 12 \\
+                                  --retry-delay 5 \\
+                                  --retry-connrefused \\
+                                  --max-time 15 \\
+                                  --output /dev/null \\
                                   "$BANK_PRODUCTION_HEALTH_URL"
                             '''
                         }
@@ -327,11 +340,9 @@ pipeline {
         success {
             echo 'Bank System pipeline completed successfully.'
         }
-
         failure {
             echo 'Pipeline failed. Check the failed stage in Console Output.'
         }
-
         always {
             cleanWs()
         }
