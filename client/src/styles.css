@@ -174,3 +174,131 @@ nav button{flex:1;flex-direction:column;height:58px;gap:2px;font-size:.66rem;pad
   .main .card-face { padding:22px; }
   .main .txns li { gap:8px; }
 }
+.admin-page {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+
+.admin-page > *,
+.admin-stats > * {
+  min-width: 0;
+}
+
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.admin-stat {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  min-height: 120px;
+}
+
+.admin-stat h2 {
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.admin-heading h3 {
+  margin: 0;
+}
+
+.admin-count {
+  color: var(--mute);
+  font-size: 0.85rem;
+}
+
+.admin-customers table {
+  min-width: 780px;
+}
+
+.admin-customers th,
+.admin-customers td {
+  padding: 16px 12px;
+}
+
+.admin-customers tbody tr:hover {
+  background: var(--glass);
+}
+
+.admin-account {
+  font-family: ui-monospace, monospace;
+}
+
+.admin-role {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--glass2);
+  color: var(--ink);
+  font-size: 0.72rem;
+}
+
+.admin-status {
+  display: inline-flex;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.admin-status.is-active {
+  color: var(--good);
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.admin-status.is-frozen {
+  color: var(--bad);
+  background: rgba(251, 113, 133, 0.12);
+}
+
+.admin-audit-list {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.admin-page .admin-audit-list li {
+  grid-template-columns: 42px minmax(0, 1fr);
+  padding: 16px 0;
+}
+
+.admin-audit-list small {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1100px) {
+  .admin-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-page {
+    gap: 18px;
+  }
+
+  .admin-stats {
+    gap: 12px;
+  }
+
+  .admin-stat {
+    padding: 16px;
+    min-height: 105px;
+  }
+}
