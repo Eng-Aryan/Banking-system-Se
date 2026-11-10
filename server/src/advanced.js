@@ -2,6 +2,21 @@ import crypto from 'node:crypto';
 import QRCode from 'qrcode';
 import { body, param } from 'express-validator';
 import { User, Account, Txn, Audit, Payee } from './models.js';
+import { monthlyInterest, BCRYPT_COST } from './finance.js';
+
+/** SR-2.2: credit I = B*(r/12) to every savings account once per calendar month (idempotent per month). */
+export async function runMonthlyInterest(now = new Date()) {
+  const month = now.toISOString().slice(0, 7); let n = 0;
+  for await (const a of Account.find({ type: 'savings', lastInterest: { $ne: month } })) {
+    const i = monthlyInterest(a.monthMin ?? a.balance);
+    const upd = await Account.findOneAndUpdate({ _id: a._id, lastInterest: { $ne: month } }, { $inc: { balance: i }, $set: { lastInterest: month } }, { new: true });
+    if (!upd) continue;
+    await Account.updateOne({ _id: a._id }, { monthMin: upd.balance });
+    if (i > 0) await Txn.create({ to: a.number, amount: i, type: 'interest', note: 'Monthly interest (2.5% p.a.)', owners: [a.user] });
+    n++;
+  }
+  return n;
+}
 
 // ---- TOTP (RFC 6238) two-factor, no external service ----
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -80,6 +95,9 @@ export function mount(app, { auth, wrap, check, log }) {
     const a = await Account.findOneAndUpdate({ user: req.params.id }, { frozen: req.body.frozen, lockedByAdmin: req.body.frozen }, { new: true });
     if (!a) return res.status(404).json({ error: 'Account not found' });
     await log(req.uid, `Admin ${a.frozen ? 'froze' : 'unfroze'} account ${a.number}`, req); res.json({ frozen: a.frozen });
+  }));
+  app.post('/api/admin/interest/run', auth, admin, wrap(async (req, res) => {
+    const n = await runMonthlyInterest(); await log(req.uid, `Admin ran monthly interest (${n} accounts)`, req); res.json({ accounts: n });
   }));
   app.get('/api/admin/audit', auth, admin, wrap(async (_q, res) => {
     const rows = await Audit.find().sort({ createdAt: -1 }).limit(30).populate('user', 'email').lean();
