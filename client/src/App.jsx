@@ -28,7 +28,7 @@ const strength = (p) => [p.length >= 10, /[a-z]/.test(p) && /[A-Z]/.test(p), /\d
 const LINES = ['Send money in seconds.', 'Guarded by two-factor security.', 'Every move, always in view.'];
 
 function Auth({ onDone }) {
-  const [mode, setMode] = useState('login'); const [f, setF] = useState({ name: '', email: '', password: '', code: '' });
+  const [mode, setMode] = useState('login'); const [f, setF] = useState({ name: '', email: '', password: '', code: '', accountType: 'current' });
   const [need, setNeed] = useState(false); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false); const [i, setI] = useState(0);
   useEffect(() => { const t = setInterval(() => setI((x) => (x + 1) % LINES.length), 3800); return () => clearInterval(t); }, []);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -49,6 +49,7 @@ function Auth({ onDone }) {
       <form className="auth-form glass" onSubmit={submit} key={mode}>
         <h2>{mode === 'login' ? 'Welcome back' : 'Open your account'}</h2>
         {mode === 'register' && fld('Full name', 'name', { autoComplete: 'name' })}
+        {mode === 'register' && <label className="acct-type">Account type<select value={f.accountType} onChange={set('accountType')}><option value="current">Current · overdraft up to $500</option><option value="savings">Savings · 2.5% yearly interest</option></select></label>}
         {fld('Email', 'email', { type: 'email', autoComplete: 'email' })}
         {fld('Password', 'password', { type: 'password', autoComplete: mode === 'login' ? 'current-password' : 'new-password' })}
         {mode === 'register' && <><div className="meter" data-s={s} style={{ '--s': s }}><i /></div><small>10+ characters, upper & lower case, a number.</small></>}
@@ -68,7 +69,7 @@ function BankCard({ acct, name }) {
   const num = acct ? (show ? acct.number.replace(/(\d{4})(\d{4})(\d{2})/, '$1 $2 $3') : '•••• •••• •• ' + acct.number.slice(-2)) : '';
   return (<div className="card3d" onMouseMove={move} onMouseLeave={leave}><div className={'card-face' + (acct?.frozen ? ' frozen' : '')} ref={ref}>
     <div className="card-top"><b>{BANK_NAME}</b><span className="chip" /></div>
-    <div><small>Available balance</small><div className="card-bal">{acct ? money(bal) : '…'}</div></div>
+    <div><small>{acct?.type === 'savings' ? 'Savings account' : 'Current account'} · available balance</small><div className="card-bal">{acct ? money(bal) : '…'}</div></div>
     <div className="card-foot"><div><div className="card-num">{num}
       <button aria-label="Show or hide number" onClick={() => setShow(!show)}><Icon n="eye" s={16} /></button>
       <button aria-label="Copy account number" onClick={() => { navigator.clipboard?.writeText(acct.number); toast('Account number copied'); }}><Icon n="copy" s={16} /></button></div>
@@ -79,12 +80,13 @@ function BankCard({ acct, name }) {
 const Txns = ({ rows }) => rows.length === 0 ? <p className="empty">Nothing here yet. Make a deposit or send money to get started.</p> : (
   <ul className="txns">{rows.map((t, i) => (
     <li key={t.id} style={{ '--i': i }}><span className={'dot ' + (t.amount > 0 ? 'in' : 'out')}><Icon n={t.amount > 0 ? 'down' : 'up'} s={18} /></span>
-      <div><b>{t.type === 'deposit' ? 'Deposit' : t.amount > 0 ? `From ${t.counterparty}` : `To ${t.counterparty}`}</b><small>{t.note || t.type} · {fmtDate(t.date)}</small></div>
+      <div><b>{t.type === 'deposit' ? 'Deposit' : t.type === 'withdrawal' ? 'Withdrawal' : t.type === 'interest' ? 'Interest' : t.amount > 0 ? `From ${t.counterparty}` : `To ${t.counterparty}`}</b><small>{t.note || t.type} · {fmtDate(t.date)}</small></div>
       <em className={t.amount > 0 ? 'in' : 'out'}>{t.amount > 0 ? '+' : '−'}{money(Math.abs(t.amount))}</em></li>))}</ul>);
 
 function Home({ acct, user, rows, refresh, go }) {
   const toast = useContext(Toast); const [amt, setAmt] = useState('');
   const dep = async (e) => { e.preventDefault(); try { await api('/accounts/deposit', { amount: Number(amt) }); setAmt(''); toast('Deposit added'); refresh(); } catch (x) { toast(x.message, 'bad'); } };
+  const wd = async () => { try { await api('/accounts/withdraw', { amount: Number(amt) }); setAmt(''); toast('Withdrawal complete'); refresh(); } catch (x) { toast(x.message, 'bad'); } };
   const inn = rows.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0), out = rows.filter((t) => t.amount < 0).reduce((s, t) => s - t.amount, 0);
   const pct = inn + out ? Math.round((inn / (inn + out)) * 100) : 50;
   const quick = [['send', 'Send', 'transfer'], ['users', 'Payees', 'payees'], ['list', 'History', 'history'], ['dl', 'Statement']];
@@ -94,7 +96,7 @@ function Home({ acct, user, rows, refresh, go }) {
         : <a key={l} href="/api/transactions/export.csv" download><i><Icon n={ic} /></i>{l}</a>)}</div>
         <h3>Money in vs out</h3><div className="bar" role="img" aria-label={`${pct}% money in`}><i style={{ '--w': pct + '%' }} /></div>
         <p className="split"><span className="in">In {money(inn)}</span><span className="out">Out {money(out)}</span></p>
-        <form className="inline" onSubmit={dep}><input type="number" step="0.01" min="1" placeholder="Add demo funds ($)" aria-label="Deposit amount" value={amt} onChange={(e) => setAmt(e.target.value)} required /><button className="btn sm">Deposit</button></form></section></div>
+        <form className="inline" onSubmit={dep}><input type="number" step="0.01" min="1" placeholder="Amount ($)" aria-label="Deposit amount" value={amt} onChange={(e) => setAmt(e.target.value)} required /><button className="btn sm">Deposit</button><button type="button" className="btn ghost sm" onClick={wd}>Withdraw</button></form></section></div>
     <div className="two"><Analytics /><section className="panel"><h3>Recent activity</h3><Txns rows={rows.slice(0, 6)} /></section></div></div>);
 }
 
