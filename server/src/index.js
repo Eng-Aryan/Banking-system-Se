@@ -4,6 +4,8 @@ if ((process.env.JWT_SECRET || '').length < 32) { console.error('JWT_SECRET must
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { User, Account } from './models.js';
+import { runMonthlyInterest } from './advanced.js';
+import { isLastDayOfMonth } from './finance.js';
 await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/bank');
 const { ADMIN_EMAIL: ae, ADMIN_PASSWORD: ap } = process.env;
 if (ae && ap && !(await User.exists({ email: ae.toLowerCase() }))) {
@@ -12,4 +14,6 @@ if (ae && ap && !(await User.exists({ email: ae.toLowerCase() }))) {
   console.log('Admin account created');
 }
 const port = process.env.PORT || 5000;
+// SR-2.2: on the last calendar day of each month credit savings interest (checked hourly, idempotent)
+setInterval(() => { if (isLastDayOfMonth()) runMonthlyInterest().catch((e) => console.error('interest run failed', e.message)); }, 3_600_000);
 app.listen(port, () => console.log(`Bank API on :${port}`));
