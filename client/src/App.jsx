@@ -1,3 +1,4 @@
+import './styles.css';
 import { useEffect, useRef, useState, useCallback, createContext, useContext } from 'react';
 import { api, money, fmtDate } from './api.js';
 import { BANK_NAME } from './config.js';
@@ -96,7 +97,7 @@ function Home({ acct, user, rows, refresh, go }) {
         : <a key={l} href="/api/transactions/export.csv" download><i><Icon n={ic} /></i>{l}</a>)}</div>
         <h3>Money in vs out</h3><div className="bar" role="img" aria-label={`${pct}% money in`}><i style={{ '--w': pct + '%' }} /></div>
         <p className="split"><span className="in">In {money(inn)}</span><span className="out">Out {money(out)}</span></p>
-        <form className="inline" onSubmit={dep}><input type="number" step="0.01" min="1" placeholder="Amount ($)" aria-label="Deposit amount" value={amt} onChange={(e) => setAmt(e.target.value)} required /><button className="btn sm">Deposit</button><button type="button" className="btn ghost sm" onClick={wd}>Withdraw</button></form></section></div>
+        <form className="inline funds-form" onSubmit={dep}><input type="number" step="0.01" min="1" placeholder="Amount ($)" aria-label="Deposit amount" value={amt} onChange={(e) => setAmt(e.target.value)} required /><button className="btn sm">Deposit</button><button type="button" className="btn ghost sm" onClick={wd}>Withdraw</button></form></section></div>
     <div className="two"><Analytics /><section className="panel"><h3>Recent activity</h3><Txns rows={rows.slice(0, 6)} /></section></div></div>);
 }
 
