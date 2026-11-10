@@ -7,7 +7,8 @@ import { hotp, verifyTotp } from '../../server/src/advanced.js';
 const GOOD = 'Str0ngPassw0rd'; const T0 = 1_700_000_000_000;
 Audit.create = async () => ({});
 const fakeUser = async (extra = {}) => { const u = { _id: 'u1', id: 'u1', name: 'Test', email: 'a@b.co', password: await bcrypt.hash(GOOD, 4), failed: 0, save: async () => {}, ...extra }; User.findOne = () => ({ select: async () => u }); return u; };
-
+// Public RFC test fixture; never used for real accounts.
+const TEST_TOTP_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'; // gitleaks:allow
 test('SR-1.1 passwords are hashed with BCrypt cost factor 12', async () => {
   assert.equal(BCRYPT_COST, 12);
   const h = await bcrypt.hash(GOOD, BCRYPT_COST);
@@ -39,11 +40,11 @@ test('UR-1 successful sign-in sets an HttpOnly, SameSite=Strict session cookie',
 });
 test('SR-1.3 TOTP: RFC 6238 vector, accepts current code, rejects wrong/empty', () => {
   assert.equal(hotp('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 1), '287082');
-  const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'; const now = hotp(secret, Math.floor(Date.now() / 30000));
+  const secret = TEST_TOTP_SECRET; const now = hotp(secret, Math.floor(Date.now() / 30000));
   assert.ok(verifyTotp(secret, now)); assert.ok(!verifyTotp(secret, '000000') || now === '000000'); assert.ok(!verifyTotp(secret, '')); assert.ok(!verifyTotp(undefined, now));
 });
 test('SR-1.3 route: with MFA on, the password alone is not enough', async () => {
-  const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'; await fakeUser({ totpEnabled: true, totpSecret: secret }); const { base, close } = startApp();
+  const secret = TEST_TOTP_SECRET; await fakeUser({ totpEnabled: true, totpSecret: secret }); const { base, close } = startApp();
   const a = await call(base, 'POST', '/auth/login', { email: 'a@b.co', password: GOOD });
   assert.equal(a.status, 401); assert.equal(a.body.need2fa, true);
   const b = await call(base, 'POST', '/auth/login', { email: 'a@b.co', password: GOOD, code: hotp(secret, Math.floor(Date.now() / 30000)) });
