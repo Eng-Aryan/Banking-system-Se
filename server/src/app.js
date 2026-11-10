@@ -8,6 +8,7 @@ import { body, query, validationResult } from 'express-validator';
 import crypto from 'node:crypto';
 import { User, Account, Txn, Audit } from './models.js';
 import { mount, verifyTotp } from './advanced.js';
+import { BCRYPT_COST, ACCOUNT_TYPES, ERR, MSG, checkDebit, debitFilter, afterFailedLogin, isLocked } from './finance.js';
 
 const SECRET = process.env.JWT_SECRET || '';
 const SECURE = process.env.COOKIE_SECURE === 'true';
@@ -42,12 +43,13 @@ app.get('/api/health', (_q, r) => r.json({ status: 'ok' }));
 
 app.post('/api/auth/register', authLimit, check([
   body('name').isString().trim().isLength({ min: 2, max: 60 }).withMessage('Enter your full name'),
-  body('email').isEmail().normalizeEmail().withMessage('Enter a valid email'), strong]),
+  body('email').isEmail().normalizeEmail().withMessage('Enter a valid email'),
+  body('accountType').optional().isIn(ACCOUNT_TYPES).withMessage('Choose a current or savings account'), strong]),
   wrap(async (req, res) => {
     const { name, email, password } = req.body;
     if (await User.exists({ email })) return res.status(409).json({ error: 'An account with this email already exists' });
-    const user = await User.create({ name, email, password: await bcrypt.hash(password, 12) });
-    await Account.create({ user: user._id, number: newNumber(), balance: 100_000 }); // $1,000 demo welcome
+    const user = await User.create({ name, email, password: await bcrypt.hash(password, BCRYPT_COST) });
+    await Account.create({ user: user._id, number: newNumber(), type: req.body.accountType || 'current', balance: 100_000, monthMin: 100_000 }); // $1,000 simulated welcome funds
     await log(user._id, 'Account created', req); setCookie(res, user.id);
     res.status(201).json({ name });
   }));
@@ -57,16 +59,17 @@ app.post('/api/auth/login', authLimit, check([body('email').isEmail().normalizeE
     const user = await User.findOne({ email: req.body.email }).select('+totpSecret');
     const bad = () => res.status(401).json({ error: 'Incorrect email or password' });
     if (!user) { await bcrypt.compare(req.body.password, '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi'); return bad(); }
-    if (user.lockUntil > new Date()) return res.status(423).json({ error: 'Too many attempts. Try again in 15 minutes.' });
+    if (isLocked({ lockUntil: user.lockUntil?.getTime() })) return res.status(423).json({ error: 'Too many attempts. Try again in 15 minutes.' });
     if (!(await bcrypt.compare(req.body.password, user.password))) {
-      user.failed += 1; if (user.failed >= 5) { user.lockUntil = new Date(Date.now() + 15 * 60_000); user.failed = 0; }
-      await user.save(); await log(user._id, 'Failed sign-in', req); return bad();
+      const s = afterFailedLogin({ failed: user.failed, firstFailAt: user.firstFailAt?.getTime(), lockUntil: user.lockUntil?.getTime() });
+      user.failed = s.failed; user.firstFailAt = s.firstFailAt ? new Date(s.firstFailAt) : undefined; user.lockUntil = s.lockUntil ? new Date(s.lockUntil) : undefined;
+      await user.save(); await log(user._id, s.locked ? 'Account locked after 3 failed sign-ins' : 'Failed sign-in', req); return bad();
     }
     if (user.totpEnabled && !verifyTotp(user.totpSecret, req.body.code)) {
       await log(user._id, 'Failed 2FA code', req);
       return res.status(401).json({ error: req.body.code ? 'That code is not valid' : 'Enter the 6-digit code from your authenticator app', need2fa: true });
     }
-    user.failed = 0; user.lockUntil = undefined; await user.save();
+    user.failed = 0; user.firstFailAt = undefined; user.lockUntil = undefined; await user.save();
     await log(user._id, 'Signed in', req); setCookie(res, user.id); res.json({ name: user.name });
   }));
 
@@ -81,12 +84,12 @@ app.post('/api/auth/password', auth, check([body('current').isString(), body('pa
   wrap(async (req, res) => {
     const u = await User.findById(req.uid);
     if (!(await bcrypt.compare(req.body.current, u.password))) return res.status(400).json({ error: 'Current password is incorrect' });
-    u.password = await bcrypt.hash(req.body.password, 12); await u.save();
+    u.password = await bcrypt.hash(req.body.password, BCRYPT_COST); await u.save();
     await log(u._id, 'Password changed', req); res.json({ ok: true });
   }));
 
 app.get('/api/accounts/me', auth, wrap(async (req, res) => {
-  const a = await Account.findOne({ user: req.uid }); res.json({ number: a.number, balance: a.balance, frozen: a.frozen });
+  const a = await Account.findOne({ user: req.uid }); res.json({ number: a.number, balance: a.balance, frozen: a.frozen, type: a.type });
 }));
 
 app.post('/api/accounts/deposit', auth, check([body('amount').isFloat({ min: 1, max: 10000 }).withMessage('Deposit between $1 and $10,000')]),
@@ -94,8 +97,25 @@ app.post('/api/accounts/deposit', auth, check([body('amount').isFloat({ min: 1, 
     const cents = Math.round(req.body.amount * 100);
     const a = await Account.findOneAndUpdate({ user: req.uid, frozen: { $ne: true } }, { $inc: { balance: cents } }, { new: true });
     if (!a) return res.status(403).json({ error: 'Your account is frozen' });
-    await Txn.create({ to: a.number, amount: cents, type: 'deposit', note: 'Demo deposit', owners: [req.uid] });
+    try { await Txn.create({ to: a.number, amount: cents, type: 'deposit', note: 'Simulated deposit', owners: [req.uid] }); }
+    catch (e) { await Account.updateOne({ _id: a._id }, { $inc: { balance: -cents } }); throw e; } // roll back: no ledger entry, no money
     await log(req.uid, 'Deposit', req); res.json({ balance: a.balance });
+  }));
+
+app.post('/api/accounts/withdraw', auth, check([body('amount').isFloat({ min: 0.01, max: 5000 }).withMessage('Withdraw between $0.01 and $5,000')]),
+  wrap(async (req, res) => {
+    const cents = Math.round(req.body.amount * 100);
+    const me = await Account.findOne({ user: req.uid });
+    if (me.frozen) return res.status(403).json({ error: MSG[ERR.FROZEN], code: ERR.FROZEN });
+    const verdict = checkDebit(me.type, me.balance, cents);
+    if (!verdict.ok) return res.status(400).json({ error: MSG[verdict.code], code: verdict.code });
+    // atomic debit: the database re-checks the floor, so two simultaneous requests can never overdraw
+    const a = await Account.findOneAndUpdate({ _id: me._id, frozen: { $ne: true }, ...debitFilter(me.type, cents) }, { $inc: { balance: -cents } }, { new: true });
+    if (!a) return res.status(400).json({ error: MSG[ERR.INSUFFICIENT], code: ERR.INSUFFICIENT });
+    try { await Txn.create({ from: a.number, amount: cents, type: 'withdrawal', note: 'Withdrawal', owners: [req.uid] }); }
+    catch (e) { await Account.updateOne({ _id: a._id }, { $inc: { balance: cents } }); throw e; } // roll back the debit
+    await Account.updateOne({ _id: a._id }, { $min: { monthMin: a.balance } });
+    await log(req.uid, 'Withdrawal', req); res.status(201).json({ balance: a.balance });
   }));
 
 app.post('/api/transactions/transfer', auth, check([
@@ -111,15 +131,16 @@ app.post('/api/transactions/transfer', auth, check([
     if (me.frozen) return res.status(403).json({ error: 'Your account is frozen. Unfreeze it in Security to send money.' });
     if (to.frozen) return res.status(400).json({ error: 'The recipient account cannot receive money right now' });
     // atomic debit: only succeeds if funds are sufficient (prevents overdraft + race conditions)
-    const debited = await Account.findOneAndUpdate({ _id: me._id, balance: { $gte: cents } }, { $inc: { balance: -cents } }, { new: true });
-    if (!debited) return res.status(400).json({ error: 'Insufficient funds' });
+    const debited = await Account.findOneAndUpdate({ _id: me._id, ...debitFilter(me.type, cents) }, { $inc: { balance: -cents } }, { new: true });
+    if (!debited) return res.status(400).json({ error: MSG[ERR.INSUFFICIENT], code: ERR.INSUFFICIENT });
+    await Account.updateOne({ _id: me._id }, { $min: { monthMin: debited.balance } });
     try { await Account.updateOne({ _id: to._id }, { $inc: { balance: cents } }); }
     catch (e) { await Account.updateOne({ _id: me._id }, { $inc: { balance: cents } }); throw e; }
     await Txn.create({ from: me.number, to: to.number, amount: cents, note: req.body.note || '', type: 'transfer', owners: [req.uid, to.user] });
     await log(req.uid, `Transfer to ${to.number}`, req); res.status(201).json({ balance: debited.balance });
   }));
 
-app.get('/api/transactions', auth, check([query('type').optional().isIn(['deposit', 'transfer', 'in', 'out'])]),
+app.get('/api/transactions', auth, check([query('type').optional().isIn(['deposit', 'withdrawal', 'transfer', 'in', 'out'])]),
   wrap(async (req, res) => {
     const a = await Account.findOne({ user: req.uid });
     const f = { owners: a.user }; const t = req.query.type;
@@ -133,4 +154,8 @@ app.get('/api/activity', auth, wrap(async (req, res) => res.json(await Audit.fin
 
 mount(app, { auth, wrap, check, log });
 app.use((_q, res) => res.status(404).json({ error: 'Not found' }));
-app.use((err, _q, res, _n) => { console.error(err); res.status(500).json({ error: 'Something went wrong' }); });
+app.use((err, _q, res, _n) => {
+  const client = err.status >= 400 && err.status < 500; // e.g. 413 body too large, 400 malformed JSON
+  if (!client) console.error(err);
+  res.status(client ? err.status : 500).json({ error: client ? 'Request could not be processed' : 'Something went wrong' });
+});
