@@ -1,0 +1,23 @@
+name: CI
+on:
+  pull_request: { branches: [main, develop] }
+  push: { branches: [develop] }
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Install server dependencies
+        run: npm ci || npm install
+        working-directory: server
+      - name: Lint server
+        run: npm run lint
+        working-directory: server
+      - name: Run automated test suite
+        run: npm test
+        working-directory: server
+      - name: Build client
+        run: npm install && npm run build
+        working-directory: client
