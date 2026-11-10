@@ -17,16 +17,19 @@ pipeline {
             defaultValue: 'bank-system',
             description: 'Exact project key from SonarQube'
         )
+
         string(
             name: 'STAGING_URL',
-            defaultValue: 'http://host.docker.internal:8000',
-            description: 'Bank frontend URL reachable from Jenkins'
+            defaultValue: 'http://host.docker.internal:8080',
+            description: 'Frontend URL reachable from Jenkins'
         )
+
         booleanParam(
             name: 'DEPLOY_PRODUCTION',
             defaultValue: false,
             description: 'Run the Ansible production deployment'
         )
+
         string(
             name: 'PRODUCTION_HEALTH_URL',
             defaultValue: '',
@@ -43,7 +46,7 @@ pipeline {
     }
 
     stages {
-        // Automatic Checkout SCM uses the job's Git credentials.
+        // Jenkins automatically checks out the configured Git repository.
 
         stage('Check Configuration & Tools') {
             steps {
@@ -66,6 +69,7 @@ pipeline {
 
                 sh '''
                     set -eu
+
                     node --version
                     npm --version
                     git --version
@@ -74,14 +78,17 @@ pipeline {
                     docker info > /dev/null
                     gitleaks version
                     curl --version > /dev/null
+
+                    test -d client/src
+                    test -d server/src
                 '''
             }
         }
 
         stage('Secret Detection') {
             steps {
-                // Show the location of findings, but redact secrets.
                 sh '''
+                    set -eu
                     gitleaks detect --source=. --no-git --redact --verbose
                 '''
             }
@@ -92,6 +99,7 @@ pipeline {
                 dir('client') {
                     sh '''
                         set -eu
+
                         if [ -f package-lock.json ]; then
                             npm ci
                         else
@@ -103,6 +111,7 @@ pipeline {
                 dir('server') {
                     sh '''
                         set -eu
+
                         if [ -f package-lock.json ]; then
                             npm ci
                         else
@@ -120,6 +129,7 @@ pipeline {
                         dir('client') {
                             sh 'npm run lint'
                         }
+
                         dir('server') {
                             sh 'npm run lint'
                         }
@@ -141,20 +151,16 @@ pipeline {
                                         variable: 'SONAR_TOKEN'
                                     )
                                 ]) {
-                                    sh '''
-                                        set +x
-                                        set -eu
+                                    timeout(time: 15, unit: 'MINUTES') {
+                                        sh '''
+                                            set +x
+                                            set -eu
 
-                                        "$SCANNER_HOME/bin/sonar-scanner" \\
-                                          -Dsonar.login="$SONAR_TOKEN" \\
-                                          -Dsonar.projectKey="$SONAR_PROJECT_KEY" \\
-                                          -Dsonar.projectName="Bank System" \\
-                                          -Dsonar.sources=client/src,server/src \\
-                                          -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**" \\
-                                          -Dsonar.host.url="$SONAR_HOST_URL" \\
-                                          -Dsonar.qualitygate.wait=true \\
-                                          -Dsonar.qualitygate.timeout=300
-                                    '''
+                                            test -x "$SCANNER_HOME/bin/sonar-scanner"
+
+                                            "$SCANNER_HOME/bin/sonar-scanner" -Dsonar.login="$SONAR_TOKEN" -Dsonar.projectKey="$SONAR_PROJECT_KEY" -Dsonar.projectName="Bank System" -Dsonar.sources=client/src,server/src -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**" -Dsonar.host.url="$SONAR_HOST_URL" -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
+                                        '''
+                                    }
                                 }
                             }
                         }
@@ -166,6 +172,7 @@ pipeline {
                         dir('server') {
                             sh 'npm audit --audit-level=high'
                         }
+
                         dir('client') {
                             sh 'npm audit --audit-level=high'
                         }
@@ -207,6 +214,8 @@ pipeline {
                             sh '''
                                 set +x
                                 set -eu
+
+                                docker compose config --quiet
                                 docker compose build
                             '''
                         }
@@ -233,8 +242,8 @@ pipeline {
                                 set +x
                                 set -eu
 
-                                docker compose up \
-                                  -d --wait --wait-timeout 120
+                                docker compose up -d --wait --wait-timeout 120
+                                docker compose ps
                             '''
                         }
                     }
@@ -248,13 +257,7 @@ pipeline {
                             sh '''
                                 set -eu
 
-                                curl --fail --silent --show-error \\
-                                  --retry 12 \\
-                                  --retry-delay 5 \\
-                                  --retry-connrefused \\
-                                  --max-time 15 \\
-                                  --output /dev/null \\
-                                  "$BANK_STAGING_URL"
+                                curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-connrefused --connect-timeout 5 --max-time 15 --output /dev/null "$BANK_STAGING_URL"
                             '''
                         }
                     }
@@ -274,6 +277,7 @@ pipeline {
                     steps {
                         sh '''
                             set -eu
+
                             ansible-playbook --version
                             test -f ansible/inventory.ini
                             test -f ansible/deploy.yml
@@ -304,10 +308,7 @@ pipeline {
                                 set +x
                                 set -eu
 
-                                ansible-playbook \\
-                                  -i ansible/inventory.ini \\
-                                  ansible/deploy.yml \\
-                                  --private-key "$SSH_KEY"
+                                ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --private-key "$SSH_KEY"
                             '''
                         }
                     }
@@ -321,13 +322,7 @@ pipeline {
                             sh '''
                                 set -eu
 
-                                curl --fail --silent --show-error \\
-                                  --retry 12 \\
-                                  --retry-delay 5 \\
-                                  --retry-connrefused \\
-                                  --max-time 15 \\
-                                  --output /dev/null \\
-                                  "$BANK_PRODUCTION_HEALTH_URL"
+                                curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-connrefused --connect-timeout 5 --max-time 15 --output /dev/null "$BANK_PRODUCTION_HEALTH_URL"
                             '''
                         }
                     }
@@ -340,9 +335,11 @@ pipeline {
         success {
             echo 'Bank System pipeline completed successfully.'
         }
+
         failure {
             echo 'Pipeline failed. Check the failed stage in Console Output.'
         }
+
         always {
             cleanWs()
         }
