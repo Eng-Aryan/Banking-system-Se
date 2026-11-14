@@ -1,0 +1,15 @@
+/* "Emerald Private Bank" theme: loaded after styles.css, overrides the palette and adds the new pages */
+:root{--bg:#04100d;--ink:#ecfdf5;--mute:#8fb3a6;--glass:rgba(236,253,245,.05);--glass2:rgba(236,253,245,.09);--line:rgba(167,243,208,.13);--brand:#10b981;--brand2:#0ea5a4;--gold:#e9c46a;--good:#4ade80;--r:20px;--disp:'Sora',system-ui,sans-serif}
+[data-theme=light]{--bg:#f1f8f5;--ink:#06231a;--mute:#4d6b60;--glass:rgba(255,255,255,.82);--line:rgba(6,35,26,.1)}
+.mesh i:nth-child(1){background:#059669}.mesh i:nth-child(2){background:#0ea5a4}.mesh i:nth-child(3){background:#b8892b}
+.btn{background:linear-gradient(135deg,#10b981,#0ea5a4)}.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+.card-face{background:linear-gradient(135deg,#064e3b,#0f766e 55%,#b8892b 140%)!important}
+.pg-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+.pg-grid{display:grid;gap:20px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.vcard{position:relative;border-radius:22px;padding:22px;min-height:190px;color:#fff;background:linear-gradient(135deg,#065f46,#0f766e 60%,#a16207 150%);box-shadow:0 24px 40px -24px #000;overflow:hidden;transition:transform .3s}
+.vcard:hover{transform:translateY(-4px) rotate(-.4deg)}.vcard.off{filter:grayscale(.9) brightness(.7)}
+.vcard .pan{font:600 1.25rem/1 ui-monospace,monospace;letter-spacing:.12em;margin:34px 0 14px}.vcard .row2{display:flex;justify-content:space-between;font-size:.85rem;opacity:.9}
+.vcard .chip{width:42px;height:30px;border-radius:7px;background:linear-gradient(135deg,#f5d98b,#b8892b)}
+.tools-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.tools-row .btn{padding:9px 14px;font-size:.85rem;border-radius:11px}
+.bar{height:10px;border-radius:99px;background:var(--glass2);overflow:hidden;margin:12px 0}.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#10b981,#e9c46a);transition:width .8s cubic-bezier(.2,.8,.2,1)}
+.mini-in{display:flex;gap:8px;margin-top:10px}.mini-in input{flex:1;min-width:0}
