@@ -1,7 +1,10 @@
 import './styles.css';
+import './theme.css';
 import { useEffect, useRef, useState, useCallback, createContext, useContext } from 'react';
 import { api, money, fmtDate } from './api.js';
 import { BANK_NAME } from './config.js';
+import { Cards, Goals } from './Pages.jsx';
+import { FaceStep, FaceSettings } from './Face.jsx';
 import { Analytics, PayeePicker, Payees, TwoFA, Freeze, Admin } from './Extra.jsx';
 
 const Toast = createContext(() => {});
@@ -9,7 +12,7 @@ const P = { home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10', send: 'M22 2L11 13M22 2
   users: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M10 11a4 4 0 100-8 4 4 0 000 8M21 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8', shield: 'M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5z',
   crown: 'M3 8l4 4 5-7 5 7 4-4-2 12H5z', out: 'M9 21H5V3h4M16 17l5-5-5-5M21 12H9', sun: 'M12 17a5 5 0 100-10 5 5 0 000 10M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
   moon: 'M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z', up: 'M7 17L17 7M8 7h9v9', down: 'M17 7L7 17M16 17H7V8', dl: 'M12 3v12M7 10l5 5 5-5M5 21h14', copy: 'M9 9h11v11H9zM5 15V5h10',
-  eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12zM12 15a3 3 0 100-6 3 3 0 000 6', wifi: 'M5 12a10 10 0 0114 0M8.5 15.5a5 5 0 017 0M12 19h.01' };
+  eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12zM12 15a3 3 0 100-6 3 3 0 000 6', wifi: 'M5 12a10 10 0 0114 0M8.5 15.5a5 5 0 017 0M12 19h.01', card: 'M2 5h20v14H2zM2 10h20M6 15h4', target: 'M12 22a10 10 0 100-20 10 10 0 000 20M12 17a5 5 0 100-10 5 5 0 000 10M12 13a1 1 0 100-2 1 1 0 000 2' };
 const Icon = ({ n, s = 20 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={P[n]} /></svg>;
 const Logo = () => <svg className="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#5b8cff" /><stop offset="1" stopColor="#8b5cf6" /></linearGradient></defs>
   <rect width="32" height="32" rx="9" fill="url(#lg)" /><path d="M9 21V11l7 6 7-6v10" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>;
@@ -30,17 +33,18 @@ const LINES = ['Send money in seconds.', 'Guarded by two-factor security.', 'Eve
 
 function Auth({ onDone }) {
   const [mode, setMode] = useState('login'); const [f, setF] = useState({ name: '', email: '', password: '', code: '', accountType: 'current' });
-  const [need, setNeed] = useState(false); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false); const [i, setI] = useState(0);
+  const [need, setNeed] = useState(false); const [face, setFace] = useState(false); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false); const [i, setI] = useState(0);
   useEffect(() => { const t = setInterval(() => setI((x) => (x + 1) % LINES.length), 3800); return () => clearInterval(t); }, []);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const fld = (label, k, p = {}) => <div className="fl"><input placeholder=" " value={f[k]} onChange={set(k)} required {...p} /><span>{label}</span></div>;
   const submit = async (e) => {
     e.preventDefault(); setBusy(true); setErr('');
-    try { await api(mode === 'login' ? '/auth/login' : '/auth/register', f); onDone(); } catch (x) { if (x.data?.need2fa) setNeed(true); setErr(x.message); } setBusy(false);
+    try { const r = await api(mode === 'login' ? '/auth/login' : '/auth/register', f); if (r.needFace) setFace(true); else onDone(); } catch (x) { if (x.data?.need2fa) setNeed(true); setErr(x.message); } setBusy(false);
   };
   const s = strength(f.password);
   return (
     <main className="auth"><Mesh />
+      {face && <div className="auth-form glass" style={{ margin: 'auto', zIndex: 2 }}><FaceStep onDone={onDone} /></div>}
       <section className="auth-art"><div className="brand"><Logo /><b>{BANK_NAME}</b></div>
         <h1 key={i} className="swap">{LINES[i]}</h1>
         <div className="float-cards" aria-hidden="true">
@@ -135,14 +139,14 @@ function Security({ user, acct, refresh, boot }) {
   const toast = useContext(Toast); const [f, setF] = useState({ current: '', password: '' }); const [log, setLog] = useState([]);
   const load = () => api('/activity').then(setLog).catch(() => {}); useEffect(() => { load(); }, []);
   const save = async (e) => { e.preventDefault(); try { await api('/auth/password', f); setF({ current: '', password: '' }); toast('Password updated'); load(); } catch (x) { toast(x.message, 'bad'); } };
-  return (<div className="grid"><TwoFA enabled={user.totpEnabled} onChange={boot} /><Freeze acct={acct} refresh={refresh} />
+  return (<div className="grid"><TwoFA enabled={user.totpEnabled} onChange={boot} /><FaceSettings enabled={user.faceEnabled} onChange={boot} /><Freeze acct={acct} refresh={refresh} />
     <form className="panel form" onSubmit={save}><h3>Change password</h3>
       <label>Current password<input type="password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} required /></label>
       <label>New password<input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required /></label><button className="btn">Update password</button></form>
     <section className="panel"><h3>Recent security activity</h3><ul className="txns">{log.map((l, i) => <li key={i} style={{ '--i': i }}><span className="dot in"><Icon n="shield" s={18} /></span><div><b>{l.event}</b><small>{fmtDate(l.createdAt)} · IP {l.ip}</small></div></li>)}</ul></section></div>);
 }
 
-const NAV = [['home', 'Overview', 'home'], ['transfer', 'Send', 'send'], ['history', 'History', 'list'], ['payees', 'Payees', 'users'], ['security', 'Security', 'shield']];
+const NAV = [['home', 'Overview', 'home'], ['transfer', 'Send', 'send'], ['history', 'History', 'list'], ['payees', 'Payees', 'users'], ['cards', 'Cards', 'card'], ['goals', 'Goals', 'target'], ['security', 'Security', 'shield']];
 
 export default function App() {
   const [user, setUser] = useState(undefined); const [view, setView] = useState('home'); const [acct, setAcct] = useState(); const [rows, setRows] = useState([]);
@@ -168,6 +172,8 @@ export default function App() {
         {view === 'transfer' && <Transfer refresh={refresh} />}
         {view === 'history' && <History />}
         {view === 'payees' && <Payees />}
+        {view === 'cards' && <Cards toast={toast} refresh={refresh} />}
+        {view === 'goals' && <Goals toast={toast} refresh={refresh} />}
         {view === 'security' && <Security user={user} acct={acct} refresh={refresh} boot={boot} />}
         {view === 'admin' && user.role === 'admin' && <Admin />}</div></main>
     <div className="toasts" role="status">{toasts.map((t) => <div key={t.id} className={'toast ' + t.k}>{t.m}</div>)}</div></div></Toast.Provider>);
