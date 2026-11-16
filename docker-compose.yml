@@ -1,22 +1,29 @@
 services:
-  mongo:
+  mongo:                       # single-node replica set: required for multi-document ACID transactions
     image: mongo:7
     restart: unless-stopped
+    command: >
+      bash -c "if [ ! -f /data/keyfile ]; then openssl rand -base64 756 > /data/keyfile; fi;
+      chmod 400 /data/keyfile; chown mongodb:mongodb /data/keyfile;
+      exec docker-entrypoint.sh mongod --replSet rs0 --keyFile /data/keyfile --bind_ip_all --auth"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-bank}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:?set MONGO_PASS in .env}
-    volumes: [mongo-data:/data/db]
-    networks: [internal]
+    volumes: [mongo-data:/data/db, mongo-key:/data]
+    networks: [internal]            # no published port: the database is unreachable from outside Docker
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD-SHELL", "mongosh -u $${MONGO_INITDB_ROOT_USERNAME} -p $${MONGO_INITDB_ROOT_PASSWORD} --authenticationDatabase admin --quiet --eval \"try{rs.status().ok}catch(e){rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}).ok}\" | grep -q 1"]
       interval: 10s
-      retries: 5
+      retries: 10
   server:
     build: ./server
     restart: unless-stopped
     environment:
-      MONGO_URI: mongodb://${MONGO_USER:-bank}:${MONGO_PASS}@mongo:27017/bank?authSource=admin
+      MONGO_URI: mongodb://${MONGO_USER:-bank}:${MONGO_PASS}@mongo:27017/bank?authSource=admin&replicaSet=rs0
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      ENC_KEY: ${ENC_KEY:?set ENC_KEY in .env (openssl rand -hex 32)}
+      RP_ID: ${RP_ID:-localhost}
+      RP_ORIGIN: ${RP_ORIGIN:-http://localhost:8000}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       PORT: 5000
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
@@ -24,6 +31,17 @@ services:
     depends_on:
       mongo: { condition: service_healthy }
     ports: ["127.0.0.1:5000:5000"]
+    networks: [internal]
+  backup:
+    build: ./backup
+    restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://${MONGO_USER:-bank}:${MONGO_PASS}@mongo:27017/bank?authSource=admin&replicaSet=rs0
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:?set BACKUP_PASSPHRASE in .env}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes: [./backups:/backups]
+    depends_on:
+      mongo: { condition: service_healthy }
     networks: [internal]
   client:
     build: ./client
@@ -33,5 +51,6 @@ services:
     networks: [internal]
 volumes:
   mongo-data:
+  mongo-key:
 networks:
   internal:
