@@ -1,12 +1,13 @@
 // Shared test helpers: boots the real Express app and replaces the Mongo models with in-memory fakes.
 import { createRequire } from 'node:module';
+import mongoose from '../../server/node_modules/mongoose/index.js';
 process.env.JWT_SECRET ||= 'test-secret-'.padEnd(40, 'x');
 const req = createRequire(new URL('../../server/package.json', import.meta.url));
 export const jwt = req('jsonwebtoken');
 export const bcrypt = req('bcryptjs');
 export const SECRET = process.env.JWT_SECRET;
 const { app } = await import('../../server/src/app.js');
-export const { Account, Txn, Audit, User } = await import('../../server/src/models.js');
+export const { Account, Txn, Audit, User } = await import('../../server/src/models/index.js');
 console.error = () => {}; // keep expected-error logs out of test output
 
 export function startApp() {
@@ -23,19 +24,24 @@ export function fakeBank(initList, { failTxn = false } = {}) {
   const accounts = (Array.isArray(initList) ? initList : [initList]).map((a, i) => ({ _id: 'a' + (i + 1), user: 'u' + (i + 1), number: '100000000' + (i + 1), frozen: false, type: 'current', balance: 0, monthMin: 0, ...a }));
   const ledger = []; const queries = [];
   const pick = (f) => accounts.find((a) => (f._id ? a._id === f._id : f.user ? a.user === f.user : true));
-  Account.findOne = async (q) => { queries.push(q); const a = pick(q); return a ? { ...a } : null; };
+  const th = (v) => ({ then: (r, j) => Promise.resolve(v).then(r, j), session() { return this; }, sort() { return this; }, lean() { return this; } }); // chainable like a Mongoose query
+  Account.findOne = (q) => { queries.push(q); const a = pick(q); return th(a ? { ...a } : null); };
+  Txn.findOne = () => th(ledger.length ? { ...ledger[ledger.length - 1] } : null);
   Account.findOneAndUpdate = async (f, u) => {
     const a = pick(f); if (!a) return null;
     if (f.frozen && '$ne' in f.frozen && a.frozen === f.frozen.$ne) return null;
     if (f.balance && a.balance < f.balance.$gte) return null;
     if (f.lastInterest && a.lastInterest === f.lastInterest.$ne) return null;
     if (u.$inc?.balance) a.balance += u.$inc.balance;
+    if (u.$min) a.monthMin = Math.min(a.monthMin, u.$min.monthMin);
     if (u.$set) Object.assign(a, u.$set);
     return { ...a };
   };
   Account.updateOne = async (f, u) => { const a = pick(f); if (u.$inc?.balance) a.balance += u.$inc.balance; if (u.$min) a.monthMin = Math.min(a.monthMin, u.$min.monthMin); if (u.monthMin !== undefined) a.monthMin = u.monthMin; };
   Account.find = (q) => accounts.filter((a) => a.type === q.type && a.lastInterest !== q.lastInterest.$ne).map((a) => ({ ...a }));
-  Txn.create = async (d) => { if (failTxn) throw new Error('simulated database failure'); ledger.push(d); return d; };
+  Txn.create = async (d) => { if (failTxn) throw new Error('simulated database failure'); const rows = Array.isArray(d) ? d : [d]; ledger.push(...rows); return Array.isArray(d) ? rows : d; };
+  // emulate MongoDB transaction: all-or-nothing (snapshot restored if the callback throws)
+  mongoose.connection.transaction = async (fn) => { const snap = JSON.stringify(accounts), n = ledger.length; try { return await fn({}); } catch (e) { JSON.parse(snap).forEach((x, i) => Object.assign(accounts[i], x)); ledger.length = n; throw e; } };
   Audit.create = async () => ({});
   return { accounts, ledger, queries };
 }
