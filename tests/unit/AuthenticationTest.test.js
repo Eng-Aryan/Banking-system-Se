@@ -2,8 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, call, cookieFor, bcrypt, User, Audit } from './_helpers.js';
-import { afterFailedLogin, isLocked, BCRYPT_COST, LOCK_MS } from '../../server/src/finance.js';
-import { hotp, verifyTotp } from '../../server/src/advanced.js';
+import { afterFailedLogin, isLocked, BCRYPT_COST, LOCK_MS } from '../../server/src/services/finance.js';
+import { hotp, verifyTotp } from '../../server/src/services/totp.js';
 const GOOD = 'Str0ngPassw0rd'; const T0 = 1_700_000_000_000;
 Audit.create = async () => ({});
 const fakeUser = async (extra = {}) => { const u = { _id: 'u1', id: 'u1', name: 'Test', email: 'a@b.co', password: await bcrypt.hash(GOOD, 4), failed: 0, save: async () => {}, ...extra }; User.findOne = () => ({ select: async () => u }); return u; };
