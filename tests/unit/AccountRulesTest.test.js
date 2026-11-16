@@ -2,8 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeBank } from './_helpers.js';
-import { lowestAllowedBalance, checkDebit, monthlyInterest, isLastDayOfMonth, ERR } from '../../server/src/finance.js';
-import { runMonthlyInterest } from '../../server/src/advanced.js';
+import { lowestAllowedBalance, checkDebit, monthlyInterest, isLastDayOfMonth, ERR } from '../../server/src/services/finance.js';
+import { runMonthlyInterest } from '../../server/src/services/interest.js';
 
 test('SR-2.1 current accounts may go down to exactly -$500.00', () => {
   assert.equal(lowestAllowedBalance('current'), -50_000);
